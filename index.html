@@ -78,7 +78,8 @@
                 calendar: <><rect width="18" height="18" x="3" y="4" rx="2" ry="2"/><line x1="16" x2="16" y1="2" y2="6"/><line x1="8" x2="8" y1="2" y2="6"/><line x1="3" x2="21" y1="10" y2="10"/></>,
                 alertTriangle: <><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" x2="12" y1="9" y2="13"/><line x1="12" x2="12.01" y1="17" y2="17"/></>,
                 activity: <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>,
-                pieChart: <><path d="M21.21 15.89A10 10 0 1 1 8 2.83"/><path d="M22 12A10 10 0 0 0 12 2v10z"/></>
+                pieChart: <><path d="M21.21 15.89A10 10 0 1 1 8 2.83"/><path d="M22 12A10 10 0 0 0 12 2v10z"/></>,
+                move: <><polyline points="5 9 2 12 5 15"/><polyline points="9 5 12 2 15 5"/><polyline points="15 19 12 22 9 19"/><polyline points="19 15 22 12 19 9"/><line x1="2" x2="22" y1="12" y2="12"/><line x1="12" x2="12" y1="2" y2="22"/></>
             };
             return <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>{icons[name] || <circle cx="12" cy="12" r="10"/>}</svg>;
         };
@@ -135,12 +136,20 @@
             const [isAddingRoom, setIsAddingRoom] = useState(false);
             const [roomTab, setRoomTab] = useState('tasks');
             
+            // Drag State
+            const [draggingRoomId, setDraggingRoomId] = useState(null);
+            const [isDragging, setIsDragging] = useState(false); // Flag para diferenciar clique de arrasto
+            
             // Forms
             const [editingWorkerId, setEditingWorkerId] = useState(null);
             const [workerForm, setWorkerForm] = useState({ name: '', role: '', baseSalary: '', inss: '', dsr: '', syndicate: '', absenceDays: '' });
             const [productionForm, setProductionForm] = useState({ workerId: '', desc: '', value: '', date: new Date().toISOString().split('T')[0] });
             const [editingPenaltyId, setEditingPenaltyId] = useState(null);
             const [penaltyForm, setPenaltyForm] = useState({ label: '', value: '' });
+            
+            // Role Editing
+            const [editingRoleId, setEditingRoleId] = useState(null);
+            const [roleForm, setRoleForm] = useState({ title: '', baseSalary: '', inss: '', dsr: '', syndicate: '' });
 
             const fileInputRef = useRef(null);
             const imageContainerRef = useRef(null);
@@ -161,8 +170,7 @@
                         
                         const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
                         
-                        // Tenta inicializar. Se a chave for inválida, isso pode jogar erro aqui ou no Auth.
-                        // Usamos try/catch para garantir que o App não quebre.
+                        // Tenta inicializar
                         const app = initializeApp(firebaseConfig);
                         const auth = getAuth(app);
                         const db = getFirestore(app);
@@ -175,7 +183,7 @@
                             await signInAnonymously(auth);
                         }
 
-                        // Se chegou aqui, auth funcionou (ou iniciou processo)
+                        // Se chegou aqui, auth funcionou
                         onAuthStateChanged(auth, (u) => {
                             setUser(u);
                             setFirebaseReady(true);
@@ -183,8 +191,6 @@
 
                     } catch (e) {
                         console.error("Firebase init failed (likely invalid API key or offline). Running in detached mode.", e);
-                        // Marcamos como 'ready' para liberar recursos se houvesse loading, mas user fica null
-                        // UI continua funcionando com dados locais iniciais
                         setFirebaseReady(false);
                         setSyncStatus('error'); 
                     }
@@ -308,7 +314,7 @@
                 return (production + fixedCharges) - absenceDiscount - penalties;
             };
 
-            // --- HANDLERS (CRUD) ---
+            // --- HANDLERS (CRUD & DRAG) ---
             const handleMapClick = (e) => {
                 if (!isAddingRoom || !planImage) return;
                 const rect = imageContainerRef.current.getBoundingClientRect();
@@ -320,6 +326,46 @@
                 setSelectedRoom(newRoom);
                 setRoomTab('tasks');
             };
+
+            // Drag Handlers
+            const handlePinMouseDown = (e, roomId) => {
+                if (isAddingRoom) return; 
+                e.stopPropagation(); 
+                e.preventDefault(); 
+                setDraggingRoomId(roomId);
+                setIsDragging(false); // Reset drag flag
+            };
+
+            const handleMapMouseMove = (e) => {
+                if (draggingRoomId && imageContainerRef.current) {
+                    setIsDragging(true); // Flag that we are actually moving
+                    const rect = imageContainerRef.current.getBoundingClientRect();
+                    const x = ((e.clientX - rect.left) / rect.width) * 100;
+                    const y = ((e.clientY - rect.top) / rect.height) * 100;
+                    
+                    // Clamp to 0-100 to stay inside image
+                    const clampedX = Math.max(0, Math.min(100, x));
+                    const clampedY = Math.max(0, Math.min(100, y));
+
+                    setRooms(prevRooms => prevRooms.map(r => r.id === draggingRoomId ? { ...r, x: clampedX, y: clampedY } : r));
+                }
+            };
+
+            const handleMapMouseUp = () => {
+                setDraggingRoomId(null);
+                // We don't reset isDragging here immediately to allow onClick to check it
+                setTimeout(() => setIsDragging(false), 100);
+            };
+
+            // Ensures dragging stops if mouse leaves the window
+            useEffect(() => {
+                const handleGlobalMouseUp = () => {
+                    if (draggingRoomId) setDraggingRoomId(null);
+                };
+                window.addEventListener('mouseup', handleGlobalMouseUp);
+                return () => window.removeEventListener('mouseup', handleGlobalMouseUp);
+            }, [draggingRoomId]);
+
 
             const updateRoom = (updated) => {
                 setRooms(rooms.map(r => r.id === updated.id ? updated : r));
@@ -341,6 +387,36 @@
                     setWorkers([...workers, { id: Date.now(), ...data }]);
                 }
                 setWorkerForm({ name: '', role: '', baseSalary: '', inss: '', dsr: '', syndicate: '', absenceDays: '' });
+            };
+
+            const handleRoleSubmit = () => {
+                if(!roleForm.title) return;
+                const roleData = {
+                    title: roleForm.title,
+                    baseSalary: Number(roleForm.baseSalary),
+                    inss: Number(roleForm.inss),
+                    dsr: Number(roleForm.dsr),
+                    syndicate: Number(roleForm.syndicate)
+                };
+
+                if (editingRoleId) {
+                    setRoles(roles.map(r => r.id === editingRoleId ? { ...r, ...roleData } : r));
+                    setEditingRoleId(null);
+                } else {
+                    setRoles([...roles, { id: Date.now(), ...roleData }]);
+                }
+                setRoleForm({ title: '', baseSalary: '', inss: '', dsr: '', syndicate: '' });
+            };
+
+            const startEditingRole = (role) => {
+                setEditingRoleId(role.id);
+                setRoleForm({
+                    title: role.title,
+                    baseSalary: role.baseSalary,
+                    inss: role.inss,
+                    dsr: role.dsr,
+                    syndicate: role.syndicate
+                });
             };
 
             // --- RENDER ---
@@ -513,14 +589,35 @@
                                             <input type="file" ref={fileInputRef} onChange={handleImageUpload} className="hidden" accept="image/*" />
                                         </div>
                                     ) : (
-                                        <div ref={imageContainerRef} className={`relative shadow-2xl h-full w-full flex items-center justify-center bg-slate-100 ${isAddingRoom ? 'cursor-crosshair' : ''}`} onClick={handleMapClick}>
-                                            <img src={planImage} alt="Planta" className="max-h-full max-w-full object-contain" />
+                                        <div 
+                                            ref={imageContainerRef} 
+                                            className={`relative shadow-2xl h-full w-full flex items-center justify-center bg-slate-100 ${isAddingRoom ? 'cursor-crosshair' : ''}`} 
+                                            onClick={handleMapClick}
+                                            onMouseMove={handleMapMouseMove}
+                                            onMouseUp={handleMapMouseUp}
+                                            onMouseLeave={handleMapMouseUp}
+                                        >
+                                            <img src={planImage} alt="Planta" className="max-h-full max-w-full object-contain pointer-events-none select-none" />
                                             {rooms.map(room => {
                                                 const hasPenalties = room.penalties?.length > 0;
+                                                const isDraggingThis = draggingRoomId === room.id;
                                                 return (
-                                                    <div key={room.id} onClick={(e) => { e.stopPropagation(); setSelectedRoom(room); setRoomTab('tasks'); }} style={{ top: `${room.y}%`, left: `${room.x}%` }} className="absolute w-8 h-8 -ml-4 -mt-8 transform transition-transform hover:scale-110 cursor-pointer z-10 flex items-center justify-center group/pin">
+                                                    <div 
+                                                        key={room.id} 
+                                                        onMouseDown={(e) => handlePinMouseDown(e, room.id)}
+                                                        onClick={(e) => { 
+                                                            // Only select if we are NOT dragging (using the isDragging flag logic we added)
+                                                            if(!isDragging) { 
+                                                                e.stopPropagation(); 
+                                                                setSelectedRoom(room); 
+                                                                setRoomTab('tasks'); 
+                                                            }
+                                                        }} 
+                                                        style={{ top: `${room.y}%`, left: `${room.x}%`, cursor: isDraggingThis ? 'grabbing' : 'grab' }} 
+                                                        className={`absolute w-8 h-8 -ml-4 -mt-8 transform transition-transform ${isDraggingThis ? 'scale-125 z-50' : 'hover:scale-110 z-10'} flex items-center justify-center group/pin select-none`}
+                                                    >
                                                         <Icon name="mapPin" className={`w-full h-full drop-shadow-md ${selectedRoom?.id === room.id ? 'text-blue-600 fill-white' : room.status === 'completed' ? 'text-emerald-500 fill-emerald-100' : hasPenalties ? 'text-red-500 fill-red-100' : 'text-amber-500 fill-amber-100'}`} />
-                                                        <div className="absolute top-9 left-1/2 transform -translate-x-1/2 flex flex-col items-center opacity-0 group-hover/pin:opacity-100 transition-opacity pointer-events-none">
+                                                        <div className={`absolute top-9 left-1/2 transform -translate-x-1/2 flex flex-col items-center opacity-0 ${isDraggingThis ? 'opacity-0' : 'group-hover/pin:opacity-100'} transition-opacity pointer-events-none`}>
                                                             <span className="bg-slate-800 text-white text-[10px] px-2 py-1 rounded shadow-lg whitespace-nowrap mb-1 font-bold">{room.name}</span>
                                                             {hasPenalties && <span className="bg-red-500 text-white text-[9px] px-1.5 py-0.5 rounded-full font-bold shadow-sm whitespace-nowrap flex items-center gap-1"><Icon name="alertTriangle" size={8} /> Multa</span>}
                                                         </div>
@@ -546,11 +643,12 @@
                                             <button onClick={() => setRoomTab('tasks')} className={`flex-1 py-3 text-sm font-medium border-b-2 transition-colors ${roomTab === 'tasks' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500'}`}>Gestão</button>
                                             <button onClick={() => setRoomTab('production')} className={`flex-1 py-3 text-sm font-medium border-b-2 transition-colors ${roomTab === 'production' ? 'border-emerald-600 text-emerald-600' : 'border-transparent text-slate-500'}`}>Produção</button>
                                         </div>
-                                        <div className="p-4 overflow-y-auto flex-1 space-y-6">
+                                        <div className="p-4 overflow-y-auto flex-1 space-y-6 flex flex-col justify-between">
+                                            <div>
                                             {roomTab === 'tasks' ? (
                                                 <>
                                                     {/* Status Selector */}
-                                                    <div className="bg-slate-50 p-1 rounded-lg flex">
+                                                    <div className="bg-slate-50 p-1 rounded-lg flex mb-4">
                                                         {['pending', 'progress', 'completed'].map(s => (
                                                             <button key={s} onClick={() => updateRoom({ ...selectedRoom, status: s })} className={`flex-1 py-1.5 text-xs font-bold rounded-md capitalize transition-all ${selectedRoom.status === s ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}>
                                                                 {s === 'pending' ? 'Pendente' : s === 'progress' ? 'Andamento' : 'Pronto'}
@@ -559,7 +657,7 @@
                                                     </div>
                                                     
                                                     {/* Multas */}
-                                                    <div className="border border-red-100 bg-red-50/50 rounded-lg p-3">
+                                                    <div className="border border-red-100 bg-red-50/50 rounded-lg p-3 mb-4">
                                                         <div className="flex items-center gap-2 mb-3 text-red-700 font-bold text-xs uppercase tracking-wide">
                                                             <Icon name="gavel" size={14} /> Penalidades / Multas
                                                         </div>
@@ -632,6 +730,19 @@
                                                     </div>
                                                 </div>
                                             )}
+                                            </div>
+
+                                            {/* Excluir Area Button - Highlighted */}
+                                            <div className="mt-8 pt-4 border-t border-slate-100">
+                                                 <Button variant="danger" className="w-full text-xs font-bold" onClick={() => {
+                                                    if(confirm('ATENÇÃO: Isso excluirá permanentemente esta área e todos os registros associados. Continuar?')) {
+                                                         setRooms(rooms.filter(r => r.id !== selectedRoom.id));
+                                                         setSelectedRoom(null);
+                                                    }
+                                                 }}>
+                                                    <Icon name="trash2" size={14}/> EXCLUIR ÁREA
+                                                 </Button>
+                                            </div>
                                         </div>
                                     </Card>
                                 )}
@@ -685,34 +796,78 @@
                             </div>
                         )}
                         
-                        {/* Config Tab (Penalties) */}
+                        {/* Config Tab (Penalties & Roles) */}
                         {activeTab === 'penalties' && (
-                             <div className="grid grid-cols-1 md:grid-cols-2 gap-8 fade-in">
-                                <div>
-                                    <h2 className="text-xl font-bold text-slate-800 mb-4">Configurar Multas Padrão</h2>
-                                    <Card>
-                                        <div className="divide-y divide-slate-100">
-                                            {penaltiesConfig.map(p => (
-                                                <div key={p.id} className="p-4 flex justify-between items-center hover:bg-slate-50">
-                                                    <div><p className="font-bold text-slate-700">{p.label}</p><p className="text-xs text-slate-400">Valor Padrão</p></div>
-                                                    <div className="flex items-center gap-4">
-                                                        <span className="font-bold text-red-500">{formatCurrency(p.value)}</span>
-                                                        <button onClick={() => setPenaltiesConfig(penaltiesConfig.filter(x => x.id !== p.id))} className="text-slate-300 hover:text-red-500"><Icon name="trash2" size={18}/></button>
+                             <div className="space-y-8 fade-in">
+                                {/* SECTION: MULTAS */}
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                                    <div>
+                                        <h2 className="text-xl font-bold text-slate-800 mb-4 flex items-center gap-2"><Icon name="gavel" /> Configurar Multas</h2>
+                                        <Card>
+                                            <div className="divide-y divide-slate-100">
+                                                {penaltiesConfig.map(p => (
+                                                    <div key={p.id} className="p-4 flex justify-between items-center hover:bg-slate-50">
+                                                        <div><p className="font-bold text-slate-700">{p.label}</p><p className="text-xs text-slate-400">Valor Padrão</p></div>
+                                                        <div className="flex items-center gap-4">
+                                                            <span className="font-bold text-red-500">{formatCurrency(p.value)}</span>
+                                                            <button onClick={() => setPenaltiesConfig(penaltiesConfig.filter(x => x.id !== p.id))} className="text-slate-300 hover:text-red-500"><Icon name="trash2" size={18}/></button>
+                                                        </div>
                                                     </div>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    </Card>
+                                                ))}
+                                            </div>
+                                        </Card>
+                                    </div>
+                                    <div>
+                                        <Card className="p-6 border-t-4 border-t-red-500">
+                                            <h3 className="font-bold text-lg mb-4">Nova Multa</h3>
+                                            <div className="space-y-4">
+                                                <Input label="Nome da Infração" placeholder="Ex: Uso incorreto de EPI" value={penaltyForm.label} onChange={e => setPenaltyForm({...penaltyForm, label: e.target.value})} />
+                                                <Input label="Valor da Multa" type="number" placeholder="0.00" value={penaltyForm.value} onChange={e => setPenaltyForm({...penaltyForm, value: e.target.value})} />
+                                                <Button variant="danger" className="w-full" onClick={() => { if(penaltyForm.label && penaltyForm.value) { setPenaltiesConfig([...penaltiesConfig, {id: Date.now(), label: penaltyForm.label, value: Number(penaltyForm.value)}]); setPenaltyForm({label:'', value:''}) } }}>Adicionar Regra</Button>
+                                            </div>
+                                        </Card>
+                                    </div>
                                 </div>
-                                <div>
-                                    <Card className="p-6 border-t-4 border-t-red-500">
-                                        <h3 className="font-bold text-lg mb-4">Adicionar Nova Regra</h3>
-                                        <div className="space-y-4">
-                                            <Input label="Nome da Infração" placeholder="Ex: Uso incorreto de EPI" value={penaltyForm.label} onChange={e => setPenaltyForm({...penaltyForm, label: e.target.value})} />
-                                            <Input label="Valor da Multa" type="number" placeholder="0.00" value={penaltyForm.value} onChange={e => setPenaltyForm({...penaltyForm, value: e.target.value})} />
-                                            <Button variant="danger" className="w-full" onClick={() => { if(penaltyForm.label && penaltyForm.value) { setPenaltiesConfig([...penaltiesConfig, {id: Date.now(), label: penaltyForm.label, value: Number(penaltyForm.value)}]); setPenaltyForm({label:'', value:''}) } }}>Adicionar Regra</Button>
-                                        </div>
-                                    </Card>
+
+                                {/* SECTION: CARGOS */}
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-8 pt-8 border-t border-slate-200">
+                                    <div>
+                                        <h2 className="text-xl font-bold text-slate-800 mb-4 flex items-center gap-2"><Icon name="briefcase" /> Configurar Cargos</h2>
+                                        <Card>
+                                            <div className="divide-y divide-slate-100">
+                                                {roles.map(r => (
+                                                    <div key={r.id} className="p-4 flex justify-between items-center hover:bg-slate-50">
+                                                        <div><p className="font-bold text-slate-700">{r.title}</p><p className="text-xs text-slate-400">Salário Base</p></div>
+                                                        <div className="flex items-center gap-2">
+                                                            <span className="font-bold text-blue-600 text-sm mr-2">{formatCurrency(r.baseSalary)}</span>
+                                                            {/* EDIT BUTTON */}
+                                                            <button onClick={() => startEditingRole(r)} className="text-blue-500 hover:bg-blue-50 p-1.5 rounded"><Icon name="edit2" size={16}/></button>
+                                                            {/* DELETE BUTTON */}
+                                                            <button onClick={() => setRoles(roles.filter(x => x.id !== r.id))} className="text-slate-300 hover:text-red-500 p-1.5 rounded"><Icon name="trash2" size={16}/></button>
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </Card>
+                                    </div>
+                                    <div>
+                                        <Card className="p-6 border-t-4 border-t-indigo-500">
+                                            <h3 className="font-bold text-lg mb-4">{editingRoleId ? 'Editar Cargo' : 'Novo Cargo Padrão'}</h3>
+                                            <div className="space-y-3">
+                                                <Input label="Título do Cargo" placeholder="Ex: Mestre de Obras" value={roleForm.title} onChange={e => setRoleForm({...roleForm, title: e.target.value})} />
+                                                <div className="grid grid-cols-2 gap-3">
+                                                    <Input label="Salário Base" type="number" value={roleForm.baseSalary} onChange={e => setRoleForm({...roleForm, baseSalary: e.target.value})} />
+                                                    <Input label="INSS (R$)" type="number" value={roleForm.inss} onChange={e => setRoleForm({...roleForm, inss: e.target.value})} />
+                                                </div>
+                                                <div className="grid grid-cols-2 gap-3">
+                                                    <Input label="DSR (R$)" type="number" value={roleForm.dsr} onChange={e => setRoleForm({...roleForm, dsr: e.target.value})} />
+                                                    <Input label="Sindicato (R$)" type="number" value={roleForm.syndicate} onChange={e => setRoleForm({...roleForm, syndicate: e.target.value})} />
+                                                </div>
+                                                <Button className="w-full mt-2 bg-indigo-600 hover:bg-indigo-700" onClick={handleRoleSubmit}>{editingRoleId ? 'Salvar Alterações' : 'Adicionar Cargo'}</Button>
+                                                {editingRoleId && <button onClick={() => { setEditingRoleId(null); setRoleForm({ title: '', baseSalary: '', inss: '', dsr: '', syndicate: '' }); }} className="w-full text-xs text-slate-400 mt-2 hover:text-slate-600">Cancelar Edição</button>}
+                                            </div>
+                                        </Card>
+                                    </div>
                                 </div>
                              </div>
                         )}
